@@ -15,9 +15,13 @@ extern crate inquire;
 #[structopt(name = "lazy-git-clean")]
 struct Opt {
 
+    /// Ignore config files
+    #[structopt(short = "-f", long = "--overwrite-config")]
+    overwrite_config: bool,
+
     /// Repo folders to process
     #[structopt(name = "REPOS", parse(from_os_str))]
-    repos: Vec<PathBuf>,
+    repos: Vec<PathBuf>
 }
 
 
@@ -94,18 +98,19 @@ fn check_repo_clean_verbose(path: &Path, repo_config: RepoConfig) -> bool{
     }
 }
 
-fn load_repo_config(path: &Path) -> Result<RepoConfig, Error> {
+fn load_repo_config(path: &Path, opt_overwrite_config: bool) -> Result<RepoConfig, Error> {
     let repo_config_path = path.join(".git/lazy-git-clean.json");
 
-    match File::open(repo_config_path.clone()) {
-        Ok(mut file) => {
-            let mut contents = String::new();
-            file.read_to_string(&mut contents).unwrap();
-            return Ok(serde_json::from_str(&contents).unwrap());
-        },
-        Err(_) => {}
+    if !opt_overwrite_config{
+        match File::open(repo_config_path.clone()) {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                file.read_to_string(&mut contents).unwrap();
+                return Ok(serde_json::from_str(&contents).unwrap());
+            },
+            Err(_) => {}
+        }
     }
-
 
     let options = vec![
         ("Read/Write (default)", RepoConfig::ReadWrite),
@@ -171,7 +176,7 @@ fn main() {
             std::process::exit(1);
         }
 
-        let repo_config = load_repo_config(path).unwrap();
+        let repo_config = load_repo_config(path, opt.overwrite_config).unwrap();
         if repo_config.is_leave_alone() {
             eprintln!("{path_display}: Repo is set to leave alone");
             check_repo_clean_verbose(path, repo_config);
