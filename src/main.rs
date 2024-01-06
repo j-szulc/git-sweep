@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use trash;
 use std::process::{Command, Stdio};
+use maplit::{hashmap};
 use serde::{Serialize, Deserialize};
 use serde_json;
 extern crate inquire;
@@ -98,6 +99,12 @@ fn check_repo_clean_verbose(path: &Path, repo_config: RepoConfig) -> bool{
     }
 }
 
+fn inquire_select<T: Clone>(prompt: &str, options: &HashMap<&str, T>) -> T {
+    let options_str = options.keys().collect::<Vec<&&str>>();
+    let selected = inquire::Select::new(prompt,options_str).prompt().unwrap();
+    options.get(selected).unwrap().clone()
+}
+
 fn load_repo_config(path: &Path, opt_overwrite_config: bool) -> Result<RepoConfig, Error> {
     let repo_config_path = path.join(".git/lazy-git-clean.json");
 
@@ -112,26 +119,21 @@ fn load_repo_config(path: &Path, opt_overwrite_config: bool) -> Result<RepoConfi
         }
     }
 
-    let options = vec![
-        ("Read/Write (default)", RepoConfig::ReadWrite),
-        ("Read Only (no push permissions)", RepoConfig::ReadOnly),
-        ("Leave alone for now", RepoConfig::LeaveAloneForNow),
-        ("Leave alone forever", RepoConfig::LeaveAloneForever),
-        ("Continue Read/Write for now", RepoConfig::ContinueReadWriteForNow),
-        ("Continue Read Only for now", RepoConfig::ContinueReadOnlyForNow)
-    ];
-    let options_str = options.iter().map(|(k,_)| *k).collect::<Vec<_>>();
-    let options_hashmap : HashMap<String, RepoConfig> = options.iter().map(|(k,v)| (k.to_string(), *v)).collect();
-
-    let selected = inquire::Select::new("Repo mode?",options_str).prompt().unwrap();
-    let repo_config = options_hashmap.get(selected).unwrap();
-
+    let options : HashMap<&str, RepoConfig> = hashmap!{
+        "Read/Write (default)" => RepoConfig::ReadWrite,
+        "Read Only (no push permissions)" => RepoConfig::ReadOnly,
+        "Leave alone for now" => RepoConfig::LeaveAloneForNow,
+        "Leave alone forever" => RepoConfig::LeaveAloneForever,
+        "Continue Read/Write for now" => RepoConfig::ContinueReadWriteForNow,
+        "Continue Read Only for now" => RepoConfig::ContinueReadOnlyForNow
+    };
+    let repo_config = inquire_select("Select repo config", &options);
     if !repo_config.is_temporary() {
         let mut file = File::create(repo_config_path).unwrap();
-        file.write_all(serde_json::to_string(repo_config).unwrap().as_bytes()).unwrap();
+        file.write_all(serde_json::to_string(&repo_config).unwrap().as_bytes()).unwrap();
     }
 
-    Ok(*repo_config)
+    Ok(repo_config)
 }
 
 fn main() {
