@@ -1,15 +1,25 @@
+mod git_utils;
+
 use std::collections::HashMap;
-use std::fmt::Error;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::os::macos::raw::stat;
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use trash;
 use std::process::{Command, Stdio};
+use git2::{Status, StatusEntry};
 use maplit::{hashmap};
 use serde::{Serialize, Deserialize};
 use serde_json;
+use multipeek::multipeek;
+use colored::Colorize;
+
+
 extern crate inquire;
+
+type Error = Box<dyn std::error::Error>;
 
 /// Move files to Trash.
 #[derive(StructOpt)]
@@ -57,47 +67,6 @@ impl RepoConfig{
     }
 }
 
-fn check_repo_clean(path: &Path, repo_config: RepoConfig) -> Result<(), String> {
-    let mut errors = Vec::new();
-
-    let git_status_out = Command::new("git").arg("status").arg("--porcelain").current_dir(path).output().unwrap();
-    if git_status_out.stdout.len() > 0 {
-        // print error
-        errors.push(String::from_utf8(git_status_out.stdout).unwrap());
-    }
-
-    // Check if remote up to date
-    if !repo_config.is_read_only() {
-        let git_push_out = Command::new("git").arg("push").arg("--dry-run").current_dir(path).output().unwrap();
-        let git_push_stderr = String::from_utf8(git_push_out.stderr).unwrap();
-        if git_push_out.stdout.len() > 0 || git_push_stderr != "Everything up-to-date\n" {
-            // print error
-            let git_push_stdout = String::from_utf8(git_push_out.stdout).unwrap();
-            errors.push(format!("Remote not up to date. Stdout: {}, Stderr: {}", git_push_stdout, git_push_stderr));
-        }
-    }
-
-
-    if errors.len() > 0 {
-        return Err(errors.join("\n"));
-    }
-    Ok(())
-}
-
-fn check_repo_clean_verbose(path: &Path, repo_config: RepoConfig) -> bool{
-    let path_display = path.display();
-    match check_repo_clean(path, repo_config) {
-        Ok(()) => {
-            eprintln!("{path_display}: Repo is clean");
-            true
-        },
-        Err(e) => {
-            eprintln!("{path_display}: Repo is not clean");
-            eprintln!("{}", e);
-            false
-        }
-    }
-}
 
 fn inquire_select<T: Clone>(prompt: &str, options: &HashMap<&str, T>) -> T {
     let options_str = options.keys().collect::<Vec<&&str>>();
@@ -136,6 +105,51 @@ fn load_repo_config(path: &Path, opt_overwrite_config: bool) -> Result<RepoConfi
     Ok(repo_config)
 }
 
+fn bool_to_checkmark(b: bool) -> &'static str {
+    if b {
+        "✅"
+    } else {
+        "❌"
+    }
+}
+
+fn print_subsection<Item: Display, Container: IntoIterator<Item=Item>> (items: Container, limit: usize, indent: usize) {
+    let mut items = multipeek(items.into_iter());
+    let mut count = 0;
+    while let Some(item) = items.next() {
+        if count >= limit && items.peek_nth(2).is_some() {
+            println!("{}... {} more", " ".repeat(indent), items.count());
+            break;
+        }
+        println!("{}{}", " ".repeat(indent), item);
+        count += 1;
+    }
+}
+
+fn process_repo(path: &Path) -> Result<(), Error> {
+    let repo = git2::Repository::open(path)?;
+    let mut remotes = git_utils::get_all_remotes(&repo, true)?;
+    let remotes_status : Vec<Result<bool, Error>> = remotes.into_iter().map(|x| git_utils::is_remote_up_to_date(&repo, x)).collect();
+    let remotes_clean = remotes_status.iter().all(|x| *x.as_ref().ok().unwrap_or(&false));
+    println!("{} Remotes up to date", bool_to_checkmark(remotes_clean));
+
+    let unsafe_to_delete = |status : Status| {
+        status.is_wt_new() || status.is_wt_modified() || status.is_index_new() || status.is_index_modified()
+    };
+
+    let statuses = repo.statuses(None)?;
+    let (unsafe_files_ignored, unsafe_files_not_ignored): (Vec<StatusEntry>, Vec<StatusEntry>) =
+        statuses.iter()
+        .filter(|x| unsafe_to_delete(x.status()))
+        .partition(|x| x.status().is_ignored());
+
+    println!("{} Not ignored files clean", bool_to_checkmark(unsafe_files_not_ignored.is_empty()));
+    print_subsection(unsafe_files_not_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
+    println!("✅ Ignored files clean");
+    print_subsection(unsafe_files_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
+    Ok(())
+}
+
 fn main() {
     // Check if lazygit installed
     if !Command::new("which").arg("lazygit").stdout(Stdio::null()).status().unwrap().success() {
@@ -145,77 +159,12 @@ fn main() {
     let opt = Opt::from_args();
     for repo in opt.repos {
         let path = repo.as_path();
-        let path_display = path.display();
-
-        // First checks
-
-        eprintln!("Processing {path_display}");
-
-        if !path.exists() {
-            // print error
-            eprintln!("{path_display}: No such file or directory");
-            continue;
-        }
-        if !path.join(".git").exists() {
-            // print error
-            eprintln!("{path_display}: Not a git repository");
-            match inquire::Confirm::new("Delete?").with_default(true).prompt(){
-                Ok(true) => {},
-                Ok(false) => continue,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            }
-            trash::delete(path).unwrap();
-            continue;
-        }
-
-        let ls_remote_status = Command::new("git").arg("ls-remote").current_dir(path).status().unwrap();
-        if !ls_remote_status.success() {
-            // print error
-            eprintln!("{path_display}: Remote not available, exit code {}", ls_remote_status);
-            std::process::exit(1);
-        }
-
-        let repo_config = load_repo_config(path, opt.overwrite_config).unwrap();
-        if repo_config.is_leave_alone() {
-            eprintln!("{path_display}: Repo is set to leave alone");
-            check_repo_clean_verbose(path, repo_config);
-            continue;
-        }
-
-        // Check if repo is clean
-        if check_repo_clean(path, repo_config).is_err() {
-            let status = Command::new("lazygit").arg("--path").arg(path).status().unwrap();
-            if !status.success() {
-                // print error
-                eprintln!("{path_display}: lazygit failed with exit code {status}");
-                continue;
-            }
-        }
-
-        match inquire::Confirm::new("Delete?").with_default(true).prompt(){
-            Ok(true) => {},
-            Ok(false) => continue,
+        println!("Processing {path}", path=path.to_str().unwrap());
+        match process_repo(path) {
+            Ok(_) => {}
             Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+                eprintln!("{}", e.to_string().red());
             }
         }
-
-        if !check_repo_clean_verbose(path, repo_config) {
-            eprintln!("REPO IS STILL NOT CLEAN!");
-            match inquire::Confirm::new("DELETE ANYWAY?").with_default(false).prompt(){
-                Ok(true) => {},
-                Ok(false) => continue,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        trash::delete(path).unwrap();
     }
 }
