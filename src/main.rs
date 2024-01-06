@@ -26,83 +26,16 @@ type Error = Box<dyn std::error::Error>;
 #[structopt(name = "lazy-git-clean")]
 struct Opt {
 
-    /// Ignore config files
-    #[structopt(short = "-f", long = "--overwrite-config")]
-    overwrite_config: bool,
-
     /// Repo folders to process
     #[structopt(name = "REPOS", parse(from_os_str))]
     repos: Vec<PathBuf>
 }
 
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
-enum RepoConfig {
-    ReadWrite,
-    ReadOnly,
-    LeaveAloneForNow,
-    LeaveAloneForever,
-    ContinueReadWriteForNow,
-    ContinueReadOnlyForNow,
-}
-
-impl RepoConfig{
-    fn is_leave_alone(&self) -> bool {
-        match self {
-            RepoConfig::LeaveAloneForNow | RepoConfig::LeaveAloneForever => true,
-            _ => false
-        }
-    }
-    fn is_temporary(&self) -> bool {
-        match self {
-            RepoConfig::LeaveAloneForNow | RepoConfig::ContinueReadWriteForNow | RepoConfig::ContinueReadOnlyForNow => true,
-            _ => false
-        }
-    }
-    fn is_read_only(&self) -> bool {
-        match self {
-            RepoConfig::ReadOnly | RepoConfig::ContinueReadOnlyForNow => true,
-            _ => false
-        }
-    }
-}
-
-
-fn inquire_select<T: Clone>(prompt: &str, options: &HashMap<&str, T>) -> T {
-    let options_str = options.keys().collect::<Vec<&&str>>();
-    let selected = inquire::Select::new(prompt,options_str).prompt().unwrap();
-    options.get(selected).unwrap().clone()
-}
-
-fn load_repo_config(path: &Path, opt_overwrite_config: bool) -> Result<RepoConfig, Error> {
-    let repo_config_path = path.join(".git/lazy-git-clean.json");
-
-    if !opt_overwrite_config{
-        match File::open(repo_config_path.clone()) {
-            Ok(mut file) => {
-                let mut contents = String::new();
-                file.read_to_string(&mut contents).unwrap();
-                return Ok(serde_json::from_str(&contents).unwrap());
-            },
-            Err(_) => {}
-        }
-    }
-
-    let options : HashMap<&str, RepoConfig> = hashmap!{
-        "Read/Write (default)" => RepoConfig::ReadWrite,
-        "Read Only (no push permissions)" => RepoConfig::ReadOnly,
-        "Leave alone for now" => RepoConfig::LeaveAloneForNow,
-        "Leave alone forever" => RepoConfig::LeaveAloneForever,
-        "Continue Read/Write for now" => RepoConfig::ContinueReadWriteForNow,
-        "Continue Read Only for now" => RepoConfig::ContinueReadOnlyForNow
-    };
-    let repo_config = inquire_select("Select repo config", &options);
-    if !repo_config.is_temporary() {
-        let mut file = File::create(repo_config_path).unwrap();
-        file.write_all(serde_json::to_string(&repo_config).unwrap().as_bytes()).unwrap();
-    }
-
-    Ok(repo_config)
+fn inquire_select<'a, T>(prompt: &str, options: &'a Vec<(&str, T)>) -> &'a T {
+    let options_str = options.iter().map(|x| x.0).collect::<Vec<_>>();
+    let selected = inquire::Select::new(prompt,options_str).prompt().unwrap().to_string();
+    let selected = options.iter().filter(|x| x.0 == selected).next().unwrap();
+    &selected.1
 }
 
 fn bool_to_checkmark(b: bool) -> &'static str {
