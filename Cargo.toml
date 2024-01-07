@@ -1,6 +1,6 @@
 [package]
 name = "lazy-git-clean"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 
@@ -16,3 +16,4 @@ maplit = "1.0.2"
 git2 = { version = "0.18.1", features = [] }
 multipeek = "0.1.2"
 colored = "2.1.0"
+rand = "0.8.5"

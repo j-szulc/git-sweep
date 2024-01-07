@@ -15,6 +15,8 @@ use serde::{Serialize, Deserialize};
 use serde_json;
 use multipeek::multipeek;
 use colored::Colorize;
+use rand::{thread_rng, Rng};
+use rand::seq::SliceRandom;
 
 
 extern crate inquire;
@@ -61,14 +63,13 @@ fn print_subsection<Item: Display, Container: IntoIterator<Item=Item>> (items: C
 
 struct RepoStatus{
     remotes_clean: bool,
-    unsafe_files_not_ignored: bool,
-    unsafe_files_ignored: bool
+    files_clean: bool
 }
 
 
 impl RepoStatus {
     fn is_clean(&self) -> bool {
-        self.remotes_clean && self.unsafe_files_not_ignored && self.unsafe_files_ignored
+        self.remotes_clean && self.files_clean
     }
 
     fn is_clean_str(&self) -> &'static str {
@@ -87,24 +88,32 @@ fn get_repo_status_verbose(repo: &Repository) -> Result<RepoStatus, Error> {
     println!("{} Remotes up to date", bool_to_checkmark(remotes_clean));
 
     let unsafe_to_delete = |status : Status| {
-        status.is_wt_new() || status.is_wt_modified() || status.is_index_new() || status.is_index_modified()
+        !status.is_ignored() &&
+            (status.is_wt_new() || status.is_wt_modified() || status.is_index_new() || status.is_index_modified() || status.is_conflicted())
     };
 
     let statuses = repo.statuses(None)?;
-    let (unsafe_files_ignored, unsafe_files_not_ignored): (Vec<StatusEntry>, Vec<StatusEntry>) =
-        statuses.iter()
+    let mut unsafe_files = statuses.iter()
         .filter(|x| unsafe_to_delete(x.status()))
-        .partition(|x| x.status().is_ignored());
+        .map(|x| x.path().unwrap().to_string())
+        .collect::<Vec<_>>();
+    unsafe_files.shuffle(&mut thread_rng());
 
-    println!("{} Not ignored files clean", bool_to_checkmark(unsafe_files_not_ignored.is_empty()));
-    print_subsection(unsafe_files_not_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
-    println!("✅ Ignored files clean");
-    print_subsection(unsafe_files_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
+
+    let mut ignored_files = statuses.iter()
+        .filter(|x| x.status().is_ignored())
+        .map(|x| x.path().unwrap().to_string())
+        .collect::<Vec<_>>();
+    ignored_files.shuffle(&mut thread_rng());
+
+    println!("{} Not ignored files clean", bool_to_checkmark(unsafe_files.is_empty()));
+    print_subsection(unsafe_files.iter(), 5, 4);
+    println!("✅ The following ignored files will be deleted:");
+    print_subsection(ignored_files, 5, 4);
 
     Ok(RepoStatus{
         remotes_clean,
-        unsafe_files_not_ignored: unsafe_files_not_ignored.is_empty(),
-        unsafe_files_ignored: unsafe_files_ignored.is_empty()
+        files_clean: unsafe_files.is_empty()
     })
 }
 
