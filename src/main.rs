@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use trash;
 use std::process::{Command, Stdio};
-use git2::{Status, StatusEntry};
+use git2::{Repository, Status, StatusEntry};
 use maplit::{hashmap};
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -59,8 +59,28 @@ fn print_subsection<Item: Display, Container: IntoIterator<Item=Item>> (items: C
     }
 }
 
-fn process_repo(path: &Path) -> Result<(), Error> {
-    let repo = git2::Repository::open(path)?;
+struct RepoStatus{
+    remotes_clean: bool,
+    unsafe_files_not_ignored: bool,
+    unsafe_files_ignored: bool
+}
+
+
+impl RepoStatus {
+    fn is_clean(&self) -> bool {
+        self.remotes_clean && self.unsafe_files_not_ignored && self.unsafe_files_ignored
+    }
+
+    fn is_clean_str(&self) -> &'static str {
+        if self.is_clean() {
+            "clean"
+        } else {
+            "not clean"
+        }
+    }
+
+}
+fn get_repo_status_verbose(repo: &Repository) -> Result<RepoStatus, Error> {
     let mut remotes = git_utils::get_all_remotes(&repo, true)?;
     let remotes_status : Vec<Result<bool, Error>> = remotes.into_iter().map(|x| git_utils::is_remote_up_to_date(&repo, x)).collect();
     let remotes_clean = remotes_status.iter().all(|x| *x.as_ref().ok().unwrap_or(&false));
@@ -80,23 +100,79 @@ fn process_repo(path: &Path) -> Result<(), Error> {
     print_subsection(unsafe_files_not_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
     println!("✅ Ignored files clean");
     print_subsection(unsafe_files_ignored.iter().map(|x| x.path().unwrap()), 5, 4);
-    Ok(())
+
+    Ok(RepoStatus{
+        remotes_clean,
+        unsafe_files_not_ignored: unsafe_files_not_ignored.is_empty(),
+        unsafe_files_ignored: unsafe_files_ignored.is_empty()
+    })
 }
 
-fn main() {
-    // Check if lazygit installed
-    if !Command::new("which").arg("lazygit").stdout(Stdio::null()).status().unwrap().success() {
-        eprintln!("lazy-git-clean requires lazygit to be installed");
-        std::process::exit(1);
+fn which(bin: &str) -> bool {
+    Command::new("which").arg(bin).stdout(Stdio::null()).status().unwrap().success()
+}
+
+fn process_repo(path: &Path) -> Result<bool, Error> {
+    let repo = Repository::open(path)?;
+    let mut changed = true;
+    let mut status = get_repo_status_verbose(&repo)?;
+    let mut used_lazygit = false;
+    let mut first_run = true;
+
+    while changed {
+        changed = false;
+        if !first_run{
+            status = get_repo_status_verbose(&repo)?;
+        }
+        first_run = false;
+        if status.is_clean() {
+            break;
+        }
+        if !used_lazygit && which("lazygit") {
+            used_lazygit = true;
+            if !inquire::Confirm::new("Do you want to use lazygit?").prompt().unwrap() {
+                continue;
+            }
+            let mut cmd = Command::new("lazygit");
+            cmd.current_dir(path);
+            let _ = cmd.status()?;
+            changed = true;
+            continue;
+        }
     }
+
+    let answer_first = inquire::Confirm::new(&format!("Repo is {}. Do you want to delete it?", status.is_clean_str())).prompt().unwrap();
+    if !answer_first{
+        return Ok(false);
+    }
+    if !status.is_clean() {
+        let answer_second = inquire::Confirm::new("Repo is not clean. Do you want to delete it anyway?").prompt().unwrap();
+        if !answer_second {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+fn main() {
     let opt = Opt::from_args();
     for repo in opt.repos {
         let path = repo.as_path();
         println!("Processing {path}", path=path.to_str().unwrap());
         match process_repo(path) {
-            Ok(_) => {}
+            Ok(true) => {
+                trash::delete(path).unwrap();
+            }
+            Ok(false) => {}
             Err(e) => {
                 eprintln!("{}", e.to_string().red());
+                if inquire::Confirm::new("Do you want to delete repository anyway?").prompt().unwrap() {
+                    if inquire::Confirm::new("Are you sure?").prompt().unwrap() {
+                        trash::delete(path).unwrap();
+                    }
+                } else {
+                    break;
+                }
             }
         }
     }
