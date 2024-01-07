@@ -1,10 +1,9 @@
-use std::path::{Path, PathBuf};
-use git2::{Remote, Status};
+use git2::{Remote};
 use crate::Error;
 
 fn get_remote_callbacks<'a>() -> Result<git2::RemoteCallbacks<'a>, Error> {
     let mut callbacks = git2::RemoteCallbacks::new();
-    callbacks.credentials(move |url, username_from_url, allowed_types| {
+    callbacks.credentials(move |_, username_from_url, _| {
         let username = username_from_url.unwrap_or("git");
         git2::Cred::ssh_key_from_agent(username)
     });

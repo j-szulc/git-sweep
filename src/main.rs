@@ -1,25 +1,15 @@
 mod git_utils;
 
-use std::collections::HashMap;
 use std::fmt::Display;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::macos::raw::stat;
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use trash;
 use std::process::{Command, Stdio};
-use git2::{Repository, Status, StatusEntry};
-use maplit::{hashmap};
-use serde::{Serialize, Deserialize};
-use serde_json;
+use git2::{Repository, Status};
 use multipeek::multipeek;
 use colored::Colorize;
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 use rand::seq::SliceRandom;
-
-
-extern crate inquire;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -33,6 +23,7 @@ struct Opt {
     repos: Vec<PathBuf>
 }
 
+#[allow(dead_code)] // For future use
 fn inquire_select<'a, T>(prompt: &str, options: &'a Vec<(&str, T)>) -> &'a T {
     let options_str = options.iter().map(|x| x.0).collect::<Vec<_>>();
     let selected = inquire::Select::new(prompt,options_str).prompt().unwrap().to_string();
@@ -56,6 +47,8 @@ fn print_subsection<Item: Display, Container: IntoIterator<Item=Item>> (items: C
             println!("{}... {} more", " ".repeat(indent), items.count());
             break;
         }
+        // To remove warning from Rust analyzer
+        let item: Item = item;
         println!("{}{}", " ".repeat(indent), item);
         count += 1;
     }
@@ -82,7 +75,7 @@ impl RepoStatus {
 
 }
 fn get_repo_status_verbose(repo: &Repository) -> Result<RepoStatus, Error> {
-    let mut remotes = git_utils::get_all_remotes(&repo, true)?;
+    let remotes = git_utils::get_all_remotes(&repo, true)?;
     let remotes_status : Vec<Result<bool, Error>> = remotes.into_iter().map(|x| git_utils::is_remote_up_to_date(&repo, x)).collect();
     let remotes_clean = remotes_status.iter().all(|x| *x.as_ref().ok().unwrap_or(&false));
     println!("{} Remotes up to date", bool_to_checkmark(remotes_clean));
