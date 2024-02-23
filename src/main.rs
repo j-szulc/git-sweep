@@ -1,10 +1,12 @@
 mod git_utils;
 
+use std::collections::HashSet;
 use colored::Colorize;
 use git2::Repository;
-use rand::seq::SliceRandom;
 use std::fmt::Display;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use rayon::iter::{ParallelIterator, IntoParallelIterator};
 use structopt::StructOpt;
 use trash;
 use crate::git_utils::is_local_dirty;
@@ -28,7 +30,21 @@ fn bool_to_checkmark(b: bool) -> &'static str {
     }
 }
 
-fn process_repo(path: &Path) -> Result<bool, Error> {
+fn multiselect<'a, T, V>(prompt: &str, pairs: &'a Vec<(T, V)>) -> Result<Vec<&'a V>, Error>
+where T: Display + Eq + Hash{
+    let items: Vec<&T> = pairs.iter().map(|(t, _)| t).collect();
+    let result = inquire::MultiSelect::new(prompt, items).prompt()?;
+    let result: HashSet<&T> = HashSet::from_iter(result);
+    let mut out = vec![];
+    for (item, value) in pairs {
+        if result.contains(item) {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn process_repo(path: &Path) -> Result<(bool, String), Error> {
     let repo = Repository::open(path)?;
     let mut msgs = vec![];
     if is_local_dirty(&repo)? {
@@ -48,38 +64,36 @@ fn process_repo(path: &Path) -> Result<bool, Error> {
             _ => {}
         }
     }
-    println!(
+    let result = format!(
         "{checkmark} {path} {reason}",
         checkmark = bool_to_checkmark(msgs.is_empty()),
         path = path.to_str().unwrap(),
         reason = msgs.join(", ")
     );
-
-    Ok(msgs.is_empty())
+    Ok((msgs.is_empty(), result))
 }
+
 fn main() -> Result<(), Error>{
     let opt = Opt::from_args();
-    for repo in opt.repos {
+    let process_results : Vec<(PathBuf, bool)> = opt.repos.into_par_iter().map(|repo| {
         let path = repo.as_path();
-        process_repo(path)?;
-        //     Ok(true) => {
-        //         trash::delete(path).unwrap();
-        //     }
-        //     Ok(false) => {}
-        //     Err(e) => {
-        //         eprintln!("{}", e.to_string().red());
-        //         if inquire::Confirm::new("Do you want to delete repository anyway?")
-        //             .prompt()
-        //             .unwrap()
-        //         {
-        //             if inquire::Confirm::new("Are you sure?").prompt().unwrap() {
-        //                 trash::delete(path).unwrap();
-        //             }
-        //         } else {
-        //             break;
-        //         }
-        //     }
-        // }
+        let clean = match process_repo(path) {
+            Ok((clean, msg)) => {
+                println!("{}", msg);
+                clean
+            }
+            Err(e) => {
+                eprintln!("{}: {}", path.to_string_lossy().red(), e);
+                false
+            }
+        };
+        (repo, clean)
+    }).collect();
+    let safe_to_delete : Vec<(&str, &PathBuf)> = process_results.iter().filter(|(_, clean)| *clean).map(|(path, _)| (path.to_str().unwrap(), path)).collect();
+    let result = multiselect("Select repos to delete", &safe_to_delete)?;
+    let result : Vec<&Path> = result.iter().map(|p| p.as_path()).collect();
+    for path in result {
+        trash::delete(path)?;
     }
     Ok(())
 }
