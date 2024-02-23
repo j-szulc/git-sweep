@@ -1,6 +1,6 @@
-# Lazy git cleaner
+# Git sweep
 
-Simple script to clean up your disk from not used local copies of git repositories.
+Simple tool to clean up your disk from unused git repositories.
 The repositories are checked for the following conditions:
 - Are there any new/modified and not ignored uncommited files
 - Are there any unpushed commits (after updating the remote)
@@ -13,7 +13,7 @@ You use the script entirely at your own risk.
 You are ultimately responsible to decide whether the selected folders are safe to delete.
 
 ```bash
-$ lazy-git-clean ~/repos/*
+$ git-sweep ~/repos/*
 ❌ /home/user/repos/repo1 Dirty local index
 ❌ /home/user/repos/repo2 Dirty local index
 ❌ /home/user/repos/repo3 Dirty local index

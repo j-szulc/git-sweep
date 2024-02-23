@@ -1,8 +1,11 @@
 [package]
-name = "lazy-git-clean"
+name = "git-sweep"
 version = "1.0.0"
 edition = "2021"
-
+description = "Simple tool to clean up your disk from unused git repositories"
+license = "MIT"
+repository = "https://github.com/j-szulc/git-sweep"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
