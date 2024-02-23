@@ -33,29 +33,15 @@ pub(crate) enum RemoteStatus {
     UpToDate,
 }
 
-impl RemoteStatus {
-    pub(crate) fn is_clean(&self) -> bool {
-        match self {
-            RemoteStatus::UpToDate => true,
-            _ => false,
-        }
-    }
-}
-impl std::fmt::Display for RemoteStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RemoteStatus::LocalAhead => write!(f, "ahead of remote"),
-            RemoteStatus::LocalBehind => write!(f, "behind remote"),
-            RemoteStatus::UpToDate => write!(f, ""),
-        }
-    }
-}
-
 pub(crate) fn is_remote_up_to_date(
     repo: &git2::Repository,
     mut remote: Remote,
 ) -> Result<RemoteStatus, Error> {
-    remote.update_tips(None, false, git2::AutotagOption::Unspecified, None)?;
+    let mut fetch_opts = git2::FetchOptions::new();
+    fetch_opts.remote_callbacks(get_remote_callbacks()?);
+    remote.download::<String>(&[], Some(&mut fetch_opts))?;
+    remote.update_tips(None, true, git2::AutotagOption::Auto, None)?;
+
     let remote_head = remote
         .list()?
         .iter()
@@ -82,4 +68,17 @@ pub(crate) fn is_remote_up_to_date(
         (true, true) => Err("Local commit is both ahead and behind remote!".into()),
         (false, false) => Err("Local commit is neither ahead nor behind remote!".into()),
     }
+}
+
+pub(crate) fn is_local_dirty(repo: &git2::Repository) -> Result<bool, Error> {
+    let statuses = repo.statuses(None)?;
+    let unsafe_to_delete = |status: git2::Status| {
+        !status.is_ignored()
+            && (status.is_wt_new()
+                || status.is_wt_modified()
+                || status.is_index_new()
+                || status.is_index_modified()
+                || status.is_conflicted())
+    };
+    Ok(statuses.iter().any(|x| unsafe_to_delete(x.status())))
 }
