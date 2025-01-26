@@ -1,7 +1,7 @@
-use crate::Error;
+use crate::utils::Result;
 use git2::Remote;
 
-fn get_remote_callbacks<'a>() -> Result<git2::RemoteCallbacks<'a>, Error> {
+pub(crate) fn get_remote_callbacks<'a>() -> Result<git2::RemoteCallbacks<'a>> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(move |_, username_from_url, _| {
         let username = username_from_url.unwrap_or("git");
@@ -9,23 +9,6 @@ fn get_remote_callbacks<'a>() -> Result<git2::RemoteCallbacks<'a>, Error> {
     });
     Ok(callbacks)
 }
-
-pub(crate) fn get_all_remotes(
-    repo: &git2::Repository,
-    connect: bool,
-) -> Result<Vec<Remote>, Error> {
-    let mut result = vec![];
-    for remote_str in repo.remotes()?.iter() {
-        let remote_str = remote_str.ok_or("Remote name is not a valid UTF-8 string")?;
-        let mut remote = repo.find_remote(remote_str)?;
-        if connect {
-            remote.connect_auth(git2::Direction::Fetch, Some(get_remote_callbacks()?), None)?;
-        }
-        result.push(remote);
-    }
-    Ok(result)
-}
-
 #[derive(Debug)]
 pub(crate) enum RemoteStatus {
     LocalAhead,
@@ -36,7 +19,7 @@ pub(crate) enum RemoteStatus {
 pub(crate) fn is_remote_up_to_date(
     repo: &git2::Repository,
     mut remote: Remote,
-) -> Result<RemoteStatus, Error> {
+) -> Result<RemoteStatus> {
     let mut fetch_opts = git2::FetchOptions::new();
     fetch_opts.remote_callbacks(get_remote_callbacks()?);
     remote.download::<String>(&[], Some(&mut fetch_opts))?;
@@ -70,7 +53,7 @@ pub(crate) fn is_remote_up_to_date(
     }
 }
 
-pub(crate) fn is_local_dirty(repo: &git2::Repository) -> Result<bool, Error> {
+pub(crate) fn is_local_dirty(repo: &git2::Repository) -> Result<bool> {
     let statuses = repo.statuses(None)?;
     let unsafe_to_delete = |status: git2::Status| {
         !status.is_ignored()
